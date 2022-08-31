@@ -1,0 +1,422 @@
+---
+title: "Gyre-spanning nucleosomal binding of human transcription factors"
+author: "Slava Sidorov"
+date: "19/08/2022"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+stringsAsFactors = F
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+library(tibble)
+library(magrittr)
+library(genomation)
+library(ComplexHeatmap)
+library(circlize)
+library(tictoc)
+library(scales)
+```
+
+## Create new results folder
+
+Create a new folder for results of each run:
+
+```{r, include=T}
+results_dir = paste0("results_", as.character(format(Sys.time(), "%Y-%m-%d_%H-%M-%S")))
+dir.create(results_dir)
+```
+
+## Fig. 2.2
+
+Heatmap of log10-scaled GTM counts in target and control sequences:
+
+```{r, include=T}
+tbxt_scan_results = read.delim(file.path("input", "tbxt_scan_counts.tsv")) %>%
+  dplyr::select(gap, strong_nucleosome, ncap_selex, shuffled_strong_nucleosome, shuffled_ncap_selex, random_genomic_sequence) %>%
+  mutate(strong_nucleosome = log10(strong_nucleosome + 1),
+         ncap_selex = log10(ncap_selex + 1),
+         shuffled_strong_nucleosome = log10(shuffled_strong_nucleosome + 1),
+         shuffled_ncap_selex = log10(shuffled_ncap_selex + 1),
+         random_genomic_sequence = log10(random_genomic_sequence + 1))
+
+h = ComplexHeatmap::Heatmap(t(tbxt_scan_results %>%
+                              tibble::column_to_rownames("gap")),
+                            cluster_rows = F,
+                            cluster_columns = F,
+                            heatmap_legend_param = list(
+                              title = "log10(count + 1)",
+                              direction = "horizontal"),
+                            row_names_side = "left",
+                            column_names_side = "top",
+                            col = circlize::colorRamp2(c(0, 4), c("blue", "red")))
+
+pdf(file = file.path(results_dir, "Fig_2_2_raw.pdf"),
+    width = 7,
+    height = 2)
+ComplexHeatmap::draw(h, heatmap_legend_side = "top")
+dev.off()
+```
+
+## Fig. 2.3B
+
+Distribution of the distances (bp) between the midpoints of the GTM77 and GTM79 matches and the dyads of the strong nucleosomes that contain the matches (min_dist = 0, max_dist = 31):
+
+```{r, include=T}
+gtm77_dist = read.delim(file.path("input", "strong_nucleosomes_T.MA0009.2.77.nt.meme_fimo_dedup_middle_points_dist_to_SN151_dyads.txt"),
+                        header = F) %>%
+  count(V1) %>%
+  distinct() %>%
+  dplyr::rename(n77 = n,
+                dm_dist = V1)
+
+gtm79_dist = read.delim(file.path("input", "strong_nucleosomes_T.MA0009.2.79.nt.meme_fimo_dedup_middle_points_dist_to_SN151_dyads.txt"),
+                        header = F) %>%
+  count(V1) %>%
+  distinct() %>%
+  bind_rows(data.frame(V1 = 31, n = 0)) %>%
+  dplyr::rename(n79 = n,
+                dm_dist = V1)
+
+gtm_dist = gtm77_dist %>%
+  left_join(gtm79_dist,
+            by = c("dm_dist" = "dm_dist"))
+
+p = ggplot(gtm_dist) +
+      geom_col(aes(x = dm_dist,
+                   y = n77),
+               fill = "blue",
+               alpha = 0.5) +
+      geom_col(aes(x = dm_dist,
+                   y = n79),
+               fill = "red",
+               alpha = 0.5) +
+      theme_classic()
+
+ggsave(filename = file.path(results_dir, "Fig_2_3B_raw.pdf"),
+       plot = p,
+       width = 4,
+       height = 3)
+```
+
+## Fig. 2.4
+
+Metaplots of the TBXT ChIP-seq signal in hESC-derived mesoderm progenitors in the GTM+ and GTM- strong nucleosomes (IP and Input):
+
+```{r, include=T}
+# ChIP-seq signal: IP
+chipseq.overall.target.file = "SRR1555410.sorted.dedup.DACfiltered.bedGraph"
+chipseq.overall.target = readGeneric(file.path("input", chipseq.overall.target.file), header = F)
+
+# ChIP-seq signal: input
+chipseq.overall.input.file = "SRR1555414.sorted.dedup.DACfiltered.bedGraph"
+chipseq.overall.input = readGeneric(file.path("input", chipseq.overall.input.file), header = F)
+
+# GTM+ strong nucleosomes: IP and input signals
+sngtm.file = "strong_nucleosomes_151nt_with_GTMs.bed"
+sngtm = readGeneric(file.path("input", sngtm.file), header = F)
+sm.sngtm = ScoreMatrix(target = chipseq.overall.target, windows = sngtm)
+sm.sngtm.input = ScoreMatrix(target = chipseq.overall.input, windows = sngtm)
+
+# GTM- strong nucleosomes: IP and input signals
+snnongtm.file = "strong_nucleosomes_151nt_without_GTMs_sample_11401.bed"
+snnongtm = readGeneric(file.path("input", snnongtm.file), header = F)
+sm.snnongtm = ScoreMatrix(target = chipseq.overall.target, windows = snnongtm)
+sm.snnongtm.input = ScoreMatrix(target = chipseq.overall.input, windows = snnongtm)
+
+# All scoring matrices
+sm.gtm.overall.list = ScoreMatrixList(c(gtm.input = sm.sngtm.input, 
+                                        nongtm.input = sm.snnongtm.input, 
+                                        gtm = sm.sngtm, 
+                                        nongtm = sm.snnongtm))
+
+pdf(file = file.path(results_dir, "Fig_2_4_raw.pdf"),
+    width = 5,
+    height = 4)
+plotMeta(sm.gtm.overall.list, 
+         xcoords = c(-75, 76), 
+         profile.names = c("Input, GTM+", "Input, GTM-", "IP, GTM+", "IP, GTM-"))
+dev.off()
+```
+
+## Fig. 2.5A
+
+Stacked bar chart of the percentage of all and GTM+ strong nucleosomes in exons, introns, regulatory and non-regulatory regions of the human genome:
+
+```{r, include=T}
+df.sn = read.table(file.path("input", "strong_nucleosomes_151nt_sorted_intersecting_genome_regions.tsv"), 
+                   row.names = NULL, 
+                   header = F)
+
+df.gtm = read.table(file.path("input", "strong_nucleosomes_T.MA0009.2.77_79.nt.meme_fimo_dedup_bed6_intersecting_genomic_regions.tsv"), 
+                    row.names = NULL, 
+                    header = F)
+
+names(df.sn) = c("Region", "Count")
+
+names(df.gtm) = c("Region", "Count")
+
+df.sn$Percentage = df.sn$Count / sum(df.sn$Count) * 100
+
+df.gtm$Percentage = df.gtm$Count / sum(df.gtm$Count) * 100
+
+df.sn$Category = rep(c("Strong nucleosomes"), nrow(df.sn))
+
+df.gtm$Category = rep(c("GTMs"), nrow(df.gtm))
+
+df = rbind(df.sn, df.gtm)
+
+df$Category = factor(df$Category, levels = c("All", "GTM+"))
+
+p = ggplot() + 
+      geom_bar(aes(y = Percentage, x = Category, fill = Region), 
+               data = df,
+               stat="identity") + 
+      labs(x = "", y = "%") +
+      theme_classic()
+
+ggsave(filename = file.path(results_dir, "Fig_2_5A_raw.pdf"),
+       plot = p,
+       width = 4,
+       height = 3)
+```
+
+## Fig. 2.5B
+
+Stacked bar chart of the percentages of all and GTM+ strong nucleosomes overlapping repeats, per repeat family:
+
+```{r, include=T}
+select_family_to_count = function(sn_df) {
+  max_overlap = max(sn_df$overlap_size)
+  
+  sn_df %<>%
+    filter(overlap_size == max_overlap)
+    
+  if (nrow(sn_df) == 1) {
+    if (sn_df[1, "overlap_size"] == 0) {
+      return("Outside")
+    }
+    return(sn_df$repeat_family)
+  } else {
+    max_overlap_families = unique(sn_df$repeat_family)
+    return(sample(max_overlap_families, 1))
+  }
+}
+
+all.sn.intersections.raw = read.delim(file.path("input", "strong_nucleosomes_151nt_sorted_hg19_repeats_repeatmasker_repFamily_intersections.tsv"),
+                                  header = F)
+
+gtm.sn.intersections.raw = read.delim(file.path("input", "strong_nucleosomes_151nt_with_GTMs_hg19_repeats_repeatmasker_repFamily_intersections.tsv"),
+                                  header = F)
+
+names(all.sn.intersections.raw) = c("chr", "start", "stop", "nucleosome_name", "repeat_family", "overlap_size")
+
+names(gtm.sn.intersections.raw) = c("chr", "start", "stop", "repeat_family", "overlap_size")
+
+tic("all.sn.intersections")
+all.sn.intersections = all.sn.intersections.raw %>%
+  group_by(chr, start, stop, nucleosome_name) %>%
+  group_modify(~ {.x %>% mutate(family_to_count = select_family_to_count(.x))}) %>%
+  ungroup() %>%
+  dplyr::select(chr, start, stop, nucleosome_name, family_to_count) %>%
+  distinct()
+toc()
+
+gtm.sn.intersections = gtm.sn.intersections.raw %>%
+  group_by(chr, start, stop) %>%
+  group_modify(~ {.x %>% mutate(family_to_count = select_family_to_count(.x))}) %>%
+  ungroup() %>%
+  dplyr::select(chr, start, stop, family_to_count) %>%
+  distinct()
+
+all.sn.intersections.stats = all.sn.intersections %>%
+  count(family_to_count) %>%
+  arrange(desc(n))
+
+gtm.sn.intersections.stats = gtm.sn.intersections %>%
+  count(family_to_count) %>%
+  arrange(desc(n))
+```
+
+The top 5 repeats (categories, including "Outside") in GTM+ strong nucleosomes:
+
+```{r, include=T}
+head(gtm.sn.intersections.stats, 5)
+```
+
+The top 5 repeats (categories, including "Outside") in all strong nucleosomes:
+
+```{r, include=T}
+head(all.sn.intersections.stats, 5)
+```
+
+Plot the strong nucleosome proportions:
+
+```{r, include=T}
+repeats_to_show = unique(c(head(all.sn.intersections.stats, 5)$family_to_count,
+                           head(gtm.sn.intersections.stats, 5)$family_to_count))
+
+all.sn.intersections.stats.final = all.sn.intersections.stats %>%
+  mutate(family_to_count = ifelse(!family_to_count %in% repeats_to_show, 
+                                  "Other",
+                                  family_to_count)) %>%
+  group_by(family_to_count) %>%
+  mutate(n = ifelse(family_to_count == "Other",
+                       sum(n),
+                       n)) %>%
+  ungroup() %>%
+  distinct()
+
+gtm.sn.intersections.stats.final = gtm.sn.intersections.stats %>%
+  mutate(family_to_count = ifelse(!family_to_count %in% repeats_to_show, 
+                                  "Other",
+                                  family_to_count)) %>%
+  group_by(family_to_count) %>%
+  mutate(n = ifelse(family_to_count == "Other",
+                       sum(n),
+                       n)) %>%
+  ungroup() %>%
+  distinct()
+
+df.sn = all.sn.intersections.stats.final
+
+df.gtm = gtm.sn.intersections.stats.final
+
+names(df.sn) = c("Family", "Count")
+
+names(df.gtm) = c("Family", "Count")
+
+df.sn$Percentage = df.sn$Count / sum(df.sn$Count) * 100
+
+df.gtm$Percentage = df.gtm$Count / sum(df.gtm$Count) * 100
+
+df.sn$Category = rep(c("All"), nrow(df.sn))
+
+df.gtm$Category = rep(c("GTM+"), nrow(df.gtm))
+
+df = rbind(df.sn, df.gtm)
+
+df$Family = factor(df$Family, levels = c("Outside", "Other", 
+                                         "MIR", "ERVL-MaLR",
+                                         "ERV1", "L1", "Alu"))
+
+df$Category = factor(df$Category, levels = c("All", "GTM+"))
+
+p = ggplot() +
+      geom_bar(aes(y = Percentage, x = Category, fill = Family),
+               data = df,
+               stat="identity") +
+      labs(x = "", y = "%") +
+      theme_classic()
+
+ggsave(filename = file.path(results_dir, "Fig_2_5B_raw.pdf"),
+       plot = p,
+       width = 4,
+       height = 3)
+```
+
+## Fig. 2.5C
+
+Stacked bar chart of the percentages of GTMs (GTM77 and GTM79 matches) located within Alu elements, partially overlapping the elements or located outside:
+
+```{r, include=T}
+gtm.alu.intersections.raw = read.delim(file.path("input", "strong_nucleosomes_T.MA0009.2.gap_77_79.nt.meme_Alu_overlaps.tsv"),
+                                       header = F)
+
+names(gtm.alu.intersections.raw) = c("chr", "start", "stop", "overlap_size")
+
+tic("gtm.alu.intersections")
+gtm.alu.intersections = gtm.alu.intersections.raw %>%
+  group_by(chr, start, stop) %>%
+  group_modify(~ {.x %>% mutate(overlap_to_count = max(.x$overlap_size))}) %>%
+  ungroup() %>%
+  dplyr::select(chr, start, stop, overlap_to_count) %>%
+  distinct()
+toc()
+
+gtm.alu.intersections.final = gtm.alu.intersections %>%
+  mutate(gtm_size = stop - start) %>%
+  mutate(gtm_category = ifelse(overlap_to_count >= gtm_size,
+                               "Within",
+                               ifelse(overlap_to_count > 0,
+                                      "Overlaps",
+                                      "Outside")))
+
+gtm.alu.intersections.stats = gtm.alu.intersections.final %>%
+  count(gtm_category) %>%
+  mutate(gtm_proportion = n / sum(n) * 100) %>%
+  distinct()
+
+p = gtm.alu.intersections.stats %>%
+  mutate(gtm_category = factor(gtm_category, levels = c("Outside", "Overlaps", "Within"))) %>%
+  mutate(data_type = "Strong nucleosome") %>%
+  ggplot(aes(x = data_type,
+             y = gtm_proportion,
+             fill = gtm_category)) +
+  geom_col() +
+  labs(x = "", y = "%") +
+  theme_classic()
+
+ggsave(filename = file.path(results_dir, "Fig_2_5C_raw.pdf"),
+       plot = p,
+       width = 3,
+       height = 3)
+```
+
+## Fig. 2.6
+
+Heatmap of the log10-scaled numbers of gapped motif matches of other human TFs in strong nucleosomes:
+
+```{r, include=T}
+pal_matches_df = read.delim(file.path("input", "strong_nucleosomes_151nt_pal_gapped_combined.tsv"))
+
+pal_matches_df = pal_matches_df[-1, ] %>% # Exclude continuous matches (gap = 0)
+  dplyr::select(-MA0009_2)
+
+cat("Number of gapped motif matches:", sum(pal_matches_df), "\n")
+
+tf_motif_ids = names(pal_matches_df)
+
+pal_matches_df_selected = pal_matches_df %>%
+  dplyr::select(tf_motif_ids[unlist(purrr::map(tf_motif_ids, function(motif_id) {
+    any(pal_matches_df[[motif_id]] > 1000)
+  }))])
+
+cat("Number of gapped motif matches in selected TFs:", sum(pal_matches_df_selected), "\n")
+
+cat("Number of matches of E2F1 gapped motifs:", sum(pal_matches_df$MA0024_3), "\n")
+
+cat("Number of matches of E2F1 motifs with a 76-bp gap:", pal_matches_df[76 - 65 + 1, "MA0024_3"], "\n")
+
+pal_matches_df_selected = log10(pal_matches_df_selected + 1)
+
+pal_matches_df_selected %<>%
+  mutate(gap = seq(65, 85)) %>%
+  tibble::column_to_rownames("gap")
+
+tf_names = c("ARNT", "E2F1", "NHLH1",
+            "CEBPB", "TCFL5", "ASCL2",
+            "HES7", "CEBPD", "CEBPE")
+
+names(pal_matches_df_selected) = tf_names
+
+h = ComplexHeatmap::Heatmap(t(pal_matches_df_selected),
+                            cluster_rows = F,
+                            cluster_columns = F,
+                            heatmap_legend_param = list(
+                              title = "log10(count + 1)",
+                              direction = "horizontal",
+                              at = 0:5),
+                            row_names_side = "left",
+                            column_names_side = "top",
+                            col = circlize::colorRamp2(c(0, 5), c("blue", "red")))
+
+pdf(file = file.path(results_dir, "Fig_2_6_raw.pdf"),
+    width = 7,
+    height = 4)
+ComplexHeatmap::draw(h, heatmap_legend_side = "top")
+dev.off()
+```
